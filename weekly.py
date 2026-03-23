@@ -114,7 +114,7 @@ try:
             <iframe
                 id="iframe-{selected_tab['gid']}"
                 src="{embed_url}"
-                style="width: {dynamic_width}px; height: 1200px; border: 1px solid #e0e0e0; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); transition: width 0.3s ease;"
+                style="width: {dynamic_width}px; height: 8000px; border: 1px solid #e0e0e0; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); transition: width 0.3s ease;"
             ></iframe>
         </div>
     """, unsafe_allow_html=True)
