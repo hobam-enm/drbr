@@ -1,13 +1,15 @@
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
+import urllib.parse
+import requests
 
 # ===== [ 1. 페이지 기본 설정 및 CSS 스타일링 ] =====
 st.set_page_config(
     page_title="드라마 주간 브리핑",
     page_icon="🎬",
-    layout="wide", # 너비를 넓게 쓰고 중앙에 1200px을 맞추기 위함
-    initial_sidebar_state="expanded" # 사이드바를 기본으로 열어둠
+    layout="wide",
+    initial_sidebar_state="collapsed" # 사이드바 미사용으로 변경
 )
 
 st.markdown("""
@@ -21,21 +23,11 @@ st.markdown("""
         padding-bottom: 1rem !important;
     }
     
-    /* 사이드바 라디오 버튼 디자인 튜닝 */
-    div[data-testid="stSidebar"] div.row-widget.stRadio > div {
-        gap: 10px;
-    }
-    div[data-testid="stSidebar"] div.row-widget.stRadio label {
+    /* Selectbox (필터 리스트) 디자인 튜닝 */
+    div[data-testid="stSelectbox"] label {
         font-size: 16px !important;
         font-weight: 600 !important;
-        padding: 10px 10px;
-        background-color: #f8f9fa;
-        border-radius: 8px;
-        transition: all 0.2s ease;
-        cursor: pointer;
-    }
-    div[data-testid="stSidebar"] div.row-widget.stRadio label:hover {
-        background-color: #e9ecef;
+        color: #333333;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -69,7 +61,43 @@ def fetch_all_tabs(sheet_id: str):
     return tab_list
 
 
-# ===== [ 3. 메인 앱 실행 로직 ] =====
+# ===== [ 3. 가변 너비 계산 (A, B, C열 합산) ] =====
+@st.cache_data(ttl=600)
+def get_dynamic_width(sheet_id: str, tab_title: str) -> int:
+    """
+    구글 API를 호출해 해당 탭의 A, B, C열 픽셀 너비를 읽어온 후 합산합니다.
+    """
+    try:
+        client = get_gspread_client()
+        creds = client.auth
+        
+        # 토큰 갱신 보장
+        if not creds.valid:
+            import google.auth.transport.requests as req
+            creds.refresh(req.Request())
+            
+        encoded_title = urllib.parse.quote(tab_title)
+        url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}?ranges={encoded_title}&fields=sheets(data(columnMetadata(pixelSize)))"
+        
+        headers = {'Authorization': f'Bearer {creds.token}'}
+        response = requests.get(url, headers=headers)
+        data = response.json()
+        
+        col_meta = data['sheets'][0]['data'][0].get('columnMetadata', [])
+        
+        w_a = col_meta[0].get('pixelSize', 100) if len(col_meta) > 0 else 100
+        w_b = col_meta[1].get('pixelSize', 100) if len(col_meta) > 1 else 100
+        w_c = col_meta[2].get('pixelSize', 100) if len(col_meta) > 2 else 100
+        
+        # 스크롤 여유분을 위해 20픽셀 정도 추가
+        return w_a + w_b + w_c + 20
+        
+    except Exception as e:
+        print(f"너비 계산 오류: {e}")
+        return 1200 # API 호출 실패 시 기본 1200px
+
+
+# ===== [ 4. 메인 앱 실행 로직 ] =====
 try:
     # 1. 시크릿에서 SHEET_ID를 가져와 탭 리스트 로드
     sheet_id = st.secrets["SHEET_ID"]
@@ -79,24 +107,21 @@ try:
         st.warning("구글 시트에 탭이 없습니다.")
         st.stop()
 
-    # 2. 사이드바 (좌측 1열 네비게이션)
-    with st.sidebar:
-        st.markdown("## 🗓️ 주간 브리핑 목록")
-        st.divider()
-        
-        # 탭 이름들만 추출
-        tab_titles = [t["display_title"] for t in all_tabs]
-        
-        # 라디오 버튼 생성 (자동으로 리스트의 첫 번째 항목이 기본 선택됨)
-        selected_title = st.radio(
-            "주차를 선택하세요", 
-            options=tab_titles,
-            label_visibility="collapsed"
-        )
+    # 2. 필터 리스트 (메인 화면 상단)
+    tab_titles = [t["display_title"] for t in all_tabs]
+    
+    # Selectbox를 사용해 필터 형태로 탭 선택 (첫 번째 탭이 기본 선택됨)
+    selected_title = st.selectbox(
+        "📅 주차 선택", 
+        options=tab_titles,
+        index=0
+    )
 
     # 3. 메인 화면 (선택된 탭의 내용 렌더링)
-    # 선택된 라디오 버튼의 title과 일치하는 탭 정보를 찾음
     selected_tab = next(t for t in all_tabs if t["display_title"] == selected_title)
+    
+    # 선택된 탭의 A+B+C열 너비 합산값 가져오기
+    dynamic_width = get_dynamic_width(sheet_id, selected_tab['original_title'])
     
     # 상단 타이틀
     st.markdown(f"<h2 style='text-align: center; color: #111;'>🎬 {selected_title}</h2>", unsafe_allow_html=True)
@@ -106,12 +131,12 @@ try:
     base_publish_url = st.secrets["PUBLISH_URL_BASE"]
     embed_url = f"{base_publish_url}?gid={selected_tab['gid']}&single=true&widget=false&headers=false&chrome=false"
     
-    # 요구사항: 중앙 정렬 & 너비 1200px 고정
+    # 요구사항: 중앙 정렬 & 가변 너비 적용
     st.markdown(f"""
         <div style="display: flex; justify-content: center; width: 100%;">
             <iframe
                 src="{embed_url}"
-                style="width: 1200px; height: 1200px; border: 1px solid #e0e0e0; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);"
+                style="width: {dynamic_width}px; height: 1200px; border: 1px solid #e0e0e0; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);"
             ></iframe>
         </div>
     """, unsafe_allow_html=True)
